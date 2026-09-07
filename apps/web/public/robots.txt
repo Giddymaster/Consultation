@@ -1,0 +1,16 @@
+User-agent: *
+Allow: /
+
+# Authenticated areas hold personal data and must never be indexed.
+Disallow: /portal
+Disallow: /consultant
+Disallow: /admin
+Disallow: /cart
+Disallow: /login
+Disallow: /register
+Disallow: /reset-password
+Disallow: /verify-email
+Disallow: /book/confirmation
+Disallow: /shop/confirmation
+
+Sitemap: https://meridianadvisory.co.ke/sitemap.xml

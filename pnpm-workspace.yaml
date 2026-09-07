@@ -1,0 +1,18 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+allowBuilds:
+  '@prisma/engines': set this to true or false
+  argon2: set this to true or false
+  esbuild: set this to true or false
+  prisma: set this to true or false
+
+# pnpm blocks postinstall scripts by default. These four genuinely need one:
+# argon2 compiles a native addon, esbuild and the Prisma packages download or
+# generate platform binaries. Everything else stays blocked.
+onlyBuiltDependencies:
+  - '@prisma/engines'
+  - argon2
+  - esbuild
+  - prisma

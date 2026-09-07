@@ -1,0 +1,30 @@
+node_modules/
+dist/
+build/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+# Every dotenv variant, however it is named. The previous `.env` line did not
+# match `.env.test`, which carries a real database password.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+apps/web/dev-dist/
+apps/api/uploads/
+storage/
+
+# Prisma generated client
+apps/api/src/generated/

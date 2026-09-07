@@ -1,0 +1,11 @@
+{
+  "extends": "@meridian/config/tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": true,
+    "moduleResolution": "Bundler",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["prisma/**/*.ts", "prisma.config.ts"]
+}

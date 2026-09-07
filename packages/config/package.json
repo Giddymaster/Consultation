@@ -1,0 +1,12 @@
+{
+  "name": "@meridian/config",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "files": ["tsconfig.base.json", "tsconfig.node.json", "tsconfig.react.json"],
+  "exports": {
+    "./tsconfig.base.json": "./tsconfig.base.json",
+    "./tsconfig.node.json": "./tsconfig.node.json",
+    "./tsconfig.react.json": "./tsconfig.react.json"
+  }
+}

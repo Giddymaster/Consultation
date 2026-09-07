@@ -1,0 +1,21 @@
+{
+  "name": "Meridian Advisory",
+  "short_name": "Meridian",
+  "description": "Consultation booking and client portal for Meridian Advisory.",
+  "start_url": "/portal",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#fbfaf8",
+  "theme_color": "#4f46e5",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Book a consultation", "url": "/book" },
+    { "name": "My bookings", "url": "/portal/bookings" },
+    { "name": "My resources", "url": "/portal/resources" }
+  ]
+}

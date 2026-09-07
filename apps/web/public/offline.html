@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>You are offline — Meridian Advisory</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; min-height: 100dvh; display: grid; place-items: center;
+        padding: 2rem; text-align: center;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #fbfaf8; color: #111827;
+      }
+      @media (prefers-color-scheme: dark) { body { background: #0d1017; color: #f1f3f8; } }
+      .mark {
+        width: 48px; height: 48px; border-radius: 12px; margin: 0 auto 1.75rem;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        display: grid; place-items: center;
+      }
+      h1 { font-size: 1.5rem; letter-spacing: -0.02em; margin: 0 0 0.75rem; }
+      p { margin: 0 auto; max-width: 30rem; line-height: 1.65; opacity: 0.7; font-size: 0.9375rem; }
+      button {
+        margin-top: 2rem; padding: 0.75rem 1.5rem; border: 0; border-radius: 10px;
+        background: #4f46e5; color: #fff; font: inherit; font-weight: 500; cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 18 L10 8 L14 14 L20 5" />
+        </svg>
+      </div>
+      <h1>You are offline</h1>
+      <p>
+        Your bookings, invoices and session notes are not stored on this device — they load from our
+        servers when you are connected, which is how we keep them private. Reconnect and try again.
+      </p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,1384 @@
+// Meridian Advisory — PostgreSQL schema.
+//
+// Conventions used throughout:
+//   * Money is stored as Int in **minor units** (cents/kobo). No Float, ever.
+//   * Instants are `DateTime @db.Timestamptz(3)` and always stored in UTC;
+//     display timezone is a per-user preference resolved at render time.
+//   * Every table an operator can filter or join on carries explicit indexes.
+//   * Deletion is restricted wherever losing the row would orphan financial
+//     history; content tables cascade from their owner.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum RoleName {
+  SUPER_ADMIN
+  ADMIN
+  CONSULTANT
+  CLIENT
+  CONTENT_MANAGER
+  FINANCE_MANAGER
+}
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  PAYMENT_PROCESSING
+  CONFIRMED
+  RESCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  REFUND_PENDING
+  REFUNDED
+  NO_SHOW
+  EXPIRED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PROCESSING
+  PARTIALLY_PAID
+  PAID
+  REFUND_PENDING
+  PARTIALLY_REFUNDED
+  REFUNDED
+  FAILED
+  ABANDONED
+}
+
+enum PaymentPurpose {
+  FULL_PAYMENT
+  DEPOSIT
+  BALANCE_PAYMENT
+  PRODUCT_ORDER
+}
+
+enum PaymentModel {
+  FULL_PAYMENT
+  FIXED_DEPOSIT
+  PERCENTAGE_DEPOSIT
+  FREE
+}
+
+enum MeetingProvider {
+  ZOOM
+  GOOGLE_MEET
+  MICROSOFT_TEAMS
+  IN_PERSON
+  PHONE
+  MANUAL
+}
+
+enum MeetingStatus {
+  PENDING
+  CREATED
+  FAILED
+  CANCELLED
+}
+
+enum CalendarProvider {
+  GOOGLE
+  MICROSOFT
+}
+
+enum SessionStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ContentStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum DiscountType {
+  /// `value` is basis points: 1000 = 10%.
+  PERCENTAGE
+  /// `value` is an amount in minor units of `currency`.
+  FIXED_AMOUNT
+}
+
+enum DiscountAppliesTo {
+  EVERYTHING
+  SERVICES
+  PRODUCTS
+}
+
+enum ProductType {
+  DIGITAL
+  PHYSICAL
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  FULFILLED
+  SHIPPED
+  CANCELLED
+  REFUNDED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  PARTIALLY_PAID
+  VOID
+  OVERDUE
+}
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  FAILED
+  SUPPRESSED
+}
+
+enum Currency {
+  KES
+  USD
+  NGN
+  GHS
+  ZAR
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum TokenPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+// ---------------------------------------------------------------------------
+// Identity, roles and permissions
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  email         String    @unique
+  passwordHash  String
+  firstName     String    @db.VarChar(80)
+  lastName      String    @db.VarChar(80)
+  phone         String?   @db.VarChar(32)
+  company       String?   @db.VarChar(160)
+  jobTitle      String?   @db.VarChar(160)
+  avatarUrl     String?   @db.VarChar(2048)
+  timezone      String    @default("Africa/Nairobi") @db.VarChar(64)
+  emailVerified Boolean   @default(false)
+  isActive      Boolean   @default(true)
+  marketingOptIn Boolean  @default(false)
+
+  // Brute-force protection. `lockedUntil` is checked before any hash compare.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime? @db.Timestamptz(3)
+  lastLoginAt         DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  roles             UserRole[]
+  refreshTokens     RefreshToken[]
+  verificationTokens VerificationToken[]
+  clientProfile     ClientProfile?
+  consultantProfile ConsultantProfile?
+  notifications     Notification[]
+  auditLogs         AuditLog[]         @relation("AuditActor")
+  authoredArticles  Article[]          @relation("ArticleAuthor")
+  orders            Order[]
+  reviews           Review[]
+  discountRedemptions DiscountRedemption[]
+
+  @@index([email])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        RoleName @unique
+  label       String   @db.VarChar(80)
+  description String?  @db.VarChar(320)
+  isSystem    Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique @db.VarChar(80)
+  description String   @db.VarChar(200)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId     String   @db.Uuid
+  roleId     String   @db.Uuid
+  assignedAt DateTime @default(now()) @db.Timestamptz(3)
+  assignedBy String?  @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+/// One row per issued refresh token. Rotation revokes the parent and records
+/// `replacedById`, so a replayed token reveals a whole compromised chain.
+model RefreshToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  /// SHA-256 of the token. The raw value exists only in the client cookie.
+  tokenHash    String    @unique @db.VarChar(64)
+  familyId     String    @db.Uuid
+  expiresAt    DateTime  @db.Timestamptz(3)
+  revokedAt    DateTime? @db.Timestamptz(3)
+  replacedById String?   @db.Uuid
+  userAgent    String?   @db.VarChar(320)
+  ip           String?   @db.VarChar(64)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model VerificationToken {
+  id        String       @id @default(uuid()) @db.Uuid
+  userId    String       @db.Uuid
+  tokenHash String       @unique @db.VarChar(64)
+  purpose   TokenPurpose
+  expiresAt DateTime     @db.Timestamptz(3)
+  usedAt    DateTime?    @db.Timestamptz(3)
+  createdAt DateTime     @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+  @@map("verification_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Profiles
+// ---------------------------------------------------------------------------
+
+model ClientProfile {
+  id           String  @id @default(uuid()) @db.Uuid
+  userId       String  @unique @db.Uuid
+  /// Human-friendly identifier shown in admin, e.g. CL-000142.
+  clientCode   String  @unique @db.VarChar(20)
+  industry     String? @db.VarChar(120)
+  companySize  String? @db.VarChar(60)
+  country      String? @db.VarChar(2)
+  city         String? @db.VarChar(120)
+  /// Internal, staff-only annotations about the account. Never client-visible.
+  internalNotes String? @db.Text
+  source       String? @db.VarChar(80)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  @@index([clientCode])
+  @@map("client_profiles")
+}
+
+model ConsultantProfile {
+  id                  String   @id @default(uuid()) @db.Uuid
+  userId              String   @unique @db.Uuid
+  slug                String   @unique @db.VarChar(160)
+  title               String   @db.VarChar(160)
+  biography           String   @db.Text
+  specialties         String[]
+  qualifications      String[]
+  languages           String[]
+  yearsExperience     Int      @default(0)
+  linkedinUrl         String?  @db.VarChar(2048)
+  websiteUrl          String?  @db.VarChar(2048)
+  timezone            String   @default("Africa/Nairobi") @db.VarChar(64)
+  /// Slot grid granularity in minutes for this consultant's calendar.
+  slotIntervalMinutes Int      @default(30)
+  isAcceptingBookings Boolean  @default(true)
+  isPublished         Boolean  @default(false)
+  sortOrder           Int      @default(0)
+  /// Denormalised for list sorting; recomputed whenever a review is approved.
+  averageRating       Float?
+  reviewCount         Int      @default(0)
+  completedSessions   Int      @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  services            ServiceConsultant[]
+  availabilityRules   AvailabilityRule[]
+  blackouts           AvailabilityBlackout[]
+  calendarConnections CalendarConnection[]
+  bookings            Booking[]
+  reviews             Review[]
+
+  @@index([slug])
+  @@index([isPublished, sortOrder])
+  @@map("consultant_profiles")
+}
+
+// ---------------------------------------------------------------------------
+// Service catalog
+// ---------------------------------------------------------------------------
+
+model ServiceCategory {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar(120)
+  slug        String  @unique @db.VarChar(160)
+  description String? @db.VarChar(500)
+  icon        String? @db.VarChar(60)
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  services Service[]
+
+  @@map("service_categories")
+}
+
+model Service {
+  id               String        @id @default(uuid()) @db.Uuid
+  name             String        @db.VarChar(160)
+  slug             String        @unique @db.VarChar(160)
+  categoryId       String        @db.Uuid
+  shortDescription String        @db.VarChar(320)
+  fullDescription  String        @db.Text
+  currency         Currency      @default(KES)
+
+  paymentModel      PaymentModel @default(FULL_PAYMENT)
+  /// Minor units. Used when paymentModel is FIXED_DEPOSIT.
+  depositAmount     Int?
+  /// Basis points (2500 = 25%). Used when paymentModel is PERCENTAGE_DEPOSIT.
+  depositPercentBps Int?
+  taxRateBps        Int          @default(0)
+
+  meetingProviders MeetingProvider[]
+  preparationNotes String?           @db.Text
+  cancellationPolicy String?         @db.Text
+  reschedulePolicy String?           @db.Text
+
+  cancellationWindowHours Int @default(24)
+  rescheduleWindowHours   Int @default(24)
+  /// Minimum notice, in hours, before the earliest bookable slot.
+  leadTimeHours           Int @default(12)
+  bookingHorizonDays      Int @default(60)
+  bufferBeforeMinutes     Int @default(0)
+  bufferAfterMinutes      Int @default(10)
+
+  status         ContentStatus @default(DRAFT)
+  isFeatured     Boolean       @default(false)
+  sortOrder      Int           @default(0)
+  heroImageUrl   String?       @db.VarChar(2048)
+  icon           String?       @db.VarChar(60)
+  seoTitle       String?       @db.VarChar(160)
+  seoDescription String?       @db.VarChar(320)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  category    ServiceCategory     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  durations   ServiceDuration[]
+  consultants ServiceConsultant[]
+  bookings    Booking[]
+  reviews     Review[]
+
+  @@index([slug])
+  @@index([status, sortOrder])
+  @@index([categoryId])
+  @@map("services")
+}
+
+/// A service is priced per duration option (30 min / 60 min / 90 min …).
+/// The price a booking pays is copied from the row matching its duration.
+model ServiceDuration {
+  id        String  @id @default(uuid()) @db.Uuid
+  serviceId String  @db.Uuid
+  minutes   Int
+  /// Minor units of the parent service's currency.
+  price     Int
+  label     String? @db.VarChar(60)
+  isDefault Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, minutes])
+  @@index([serviceId])
+  @@map("service_durations")
+}
+
+model ServiceConsultant {
+  serviceId    String @db.Uuid
+  consultantId String @db.Uuid
+
+  service    Service           @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  consultant ConsultantProfile @relation(fields: [consultantId], references: [id], onDelete: Cascade)
+
+  @@id([serviceId, consultantId])
+  @@index([consultantId])
+  @@map("service_consultants")
+}
+
+// ---------------------------------------------------------------------------
+// Availability
+// ---------------------------------------------------------------------------
+
+/// Recurring weekly working block, expressed in the consultant's own timezone.
+model AvailabilityRule {
+  id           String  @id @default(uuid()) @db.Uuid
+  consultantId String  @db.Uuid
+  /// 0 = Sunday … 6 = Saturday.
+  weekday      Int
+  /// Local wall-clock "HH:MM". Converted to instants per-date using the
+  /// consultant's timezone, so DST shifts are handled correctly.
+  startTime    String  @db.VarChar(5)
+  endTime      String  @db.VarChar(5)
+  isActive     Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  consultant ConsultantProfile @relation(fields: [consultantId], references: [id], onDelete: Cascade)
+
+  @@index([consultantId, weekday])
+  @@map("availability_rules")
+}
+
+/// One-off unavailability (leave, travel, an all-day internal commitment).
+model AvailabilityBlackout {
+  id           String   @id @default(uuid()) @db.Uuid
+  consultantId String   @db.Uuid
+  startAt      DateTime @db.Timestamptz(3)
+  endAt        DateTime @db.Timestamptz(3)
+  reason       String?  @db.VarChar(200)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  consultant ConsultantProfile @relation(fields: [consultantId], references: [id], onDelete: Cascade)
+
+  @@index([consultantId, startAt, endAt])
+  @@map("availability_blackouts")
+}
+
+// ---------------------------------------------------------------------------
+// Calendar integration
+// ---------------------------------------------------------------------------
+
+model CalendarConnection {
+  id           String           @id @default(uuid()) @db.Uuid
+  consultantId String           @db.Uuid
+  provider     CalendarProvider
+  /// Provider account identifier (Google `sub`, Microsoft `id`).
+  accountId    String           @db.VarChar(200)
+  accountEmail String           @db.VarChar(254)
+  /// Both token fields are AES-256-GCM ciphertext, never plaintext.
+  accessToken  String           @db.Text
+  refreshToken String?          @db.Text
+  expiresAt    DateTime?        @db.Timestamptz(3)
+  scope        String?          @db.Text
+  /// Calendar the platform writes consultation events into.
+  calendarId   String?          @db.VarChar(320)
+  syncEnabled  Boolean          @default(true)
+  lastSyncedAt DateTime?        @db.Timestamptz(3)
+  lastError    String?          @db.Text
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  consultant     ConsultantProfile @relation(fields: [consultantId], references: [id], onDelete: Cascade)
+  calendarEvents CalendarEvent[]
+
+  @@unique([consultantId, provider, accountId])
+  @@index([consultantId])
+  @@map("calendar_connections")
+}
+
+model CalendarEvent {
+  id             String           @id @default(uuid()) @db.Uuid
+  bookingId      String           @db.Uuid
+  connectionId   String           @db.Uuid
+  provider       CalendarProvider
+  externalEventId String          @db.VarChar(320)
+  htmlLink       String?          @db.VarChar(2048)
+  iCalUid        String?          @db.VarChar(320)
+  status         String           @default("CONFIRMED") @db.VarChar(32)
+  lastError      String?          @db.Text
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  booking    Booking            @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  connection CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, externalEventId])
+  @@index([bookingId])
+  @@map("calendar_events")
+}
+
+/// Busy intervals mirrored from a connected calendar so slot computation does
+/// not hit the provider API on every availability request.
+model CalendarBusyBlock {
+  id           String   @id @default(uuid()) @db.Uuid
+  connectionId String   @db.Uuid
+  consultantId String   @db.Uuid
+  startAt      DateTime @db.Timestamptz(3)
+  endAt        DateTime @db.Timestamptz(3)
+  fetchedAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([consultantId, startAt, endAt])
+  @@index([connectionId])
+  @@map("calendar_busy_blocks")
+}
+
+// ---------------------------------------------------------------------------
+// Bookings
+// ---------------------------------------------------------------------------
+
+model Booking {
+  id           String @id @default(uuid()) @db.Uuid
+  /// Short human reference shown to clients, e.g. MRD-7K4Q2X.
+  reference    String @unique @db.VarChar(24)
+  clientId     String @db.Uuid
+  consultantId String @db.Uuid
+  serviceId    String @db.Uuid
+
+  status        BookingStatus @default(PENDING_PAYMENT)
+  paymentStatus PaymentStatus @default(UNPAID)
+
+  startAt         DateTime @db.Timestamptz(3)
+  endAt           DateTime @db.Timestamptz(3)
+  durationMinutes Int
+  /// Timezone the client booked in; used for their email and portal display.
+  timezone        String   @db.VarChar(64)
+  /// startAt/endAt padded by the service buffers. Conflict detection uses
+  /// these columns so back-to-back sessions keep their turnaround gap.
+  blockStartAt    DateTime @db.Timestamptz(3)
+  blockEndAt      DateTime @db.Timestamptz(3)
+
+  // Authoritative pricing, computed server-side and frozen at creation.
+  currency   Currency
+  subtotal   Int
+  discount   Int      @default(0)
+  taxRateBps Int      @default(0)
+  tax        Int      @default(0)
+  total      Int
+  /// Amount required to hold the slot (deposit, or the full total).
+  amountDueNow Int
+  amountPaid   Int    @default(0)
+  discountCode String? @db.VarChar(40)
+
+  meetingProvider MeetingProvider
+  objective       String?         @db.Text
+  notes           String?         @db.Text
+  cancellationReason String?      @db.VarChar(500)
+  cancelledAt     DateTime?       @db.Timestamptz(3)
+  confirmedAt     DateTime?       @db.Timestamptz(3)
+  /// Unpaid bookings past this instant are swept to EXPIRED and release the slot.
+  holdExpiresAt   DateTime?       @db.Timestamptz(3)
+  rescheduleCount Int             @default(0)
+
+  /// Deduplicates a double-submitted booking wizard.
+  idempotencyKey String? @unique @db.VarChar(80)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  client         ClientProfile     @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  consultant     ConsultantProfile @relation(fields: [consultantId], references: [id], onDelete: Restrict)
+  service        Service           @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  payments       Payment[]
+  invoice        Invoice?
+  videoMeeting   VideoMeeting?
+  calendarEvents CalendarEvent[]
+  session        ConsultationSession?
+  review         Review?
+  statusHistory  BookingStatusEvent[]
+
+  @@index([startAt])
+  @@index([consultantId, startAt])
+  @@index([clientId])
+  @@index([status, startAt])
+  @@index([paymentStatus])
+  @@index([serviceId])
+  @@index([reference])
+  @@map("bookings")
+}
+
+/// Append-only trail of every state change, for audit and for the admin timeline.
+model BookingStatusEvent {
+  id        String        @id @default(uuid()) @db.Uuid
+  bookingId String        @db.Uuid
+  fromStatus BookingStatus?
+  toStatus  BookingStatus
+  reason    String?       @db.VarChar(500)
+  actorId   String?       @db.Uuid
+  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId, createdAt])
+  @@map("booking_status_events")
+}
+
+model VideoMeeting {
+  id        String          @id @default(uuid()) @db.Uuid
+  bookingId String          @unique @db.Uuid
+  provider  MeetingProvider
+  status    MeetingStatus   @default(PENDING)
+
+  externalMeetingId String? @db.VarChar(320)
+  /// Participant link. This is the only URL ever exposed to a client.
+  joinUrl           String? @db.VarChar(2048)
+  /// Host/start links are privileged; serialisers must exclude them.
+  hostUrl           String? @db.VarChar(2048)
+  passcode          String? @db.VarChar(64)
+  dialInNumber      String? @db.VarChar(64)
+
+  startTime DateTime? @db.Timestamptz(3)
+  endTime   DateTime? @db.Timestamptz(3)
+
+  attempts      Int       @default(0)
+  failureReason String?   @db.Text
+  lastAttemptAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("video_meetings")
+}
+
+// ---------------------------------------------------------------------------
+// Sessions and notes
+// ---------------------------------------------------------------------------
+
+model ConsultationSession {
+  id        String        @id @default(uuid()) @db.Uuid
+  bookingId String        @unique @db.Uuid
+  status    SessionStatus @default(SCHEDULED)
+  startedAt DateTime?     @db.Timestamptz(3)
+  endedAt   DateTime?     @db.Timestamptz(3)
+  /// Minutes actually spent, which can differ from the booked duration.
+  actualMinutes Int?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  booking     Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  note        SessionNote?
+  attachments Attachment[]
+
+  @@index([status])
+  @@map("consultation_sessions")
+}
+
+/// Structured write-up. `privateNotes` is consultant/admin-only and is stripped
+/// by the client serialiser; the shared fields surface only when
+/// `sharedWithClient` is true.
+model SessionNote {
+  id        String @id @default(uuid()) @db.Uuid
+  sessionId String @unique @db.Uuid
+
+  objective         String? @db.Text
+  discussionSummary String? @db.Text
+  keyFindings       String? @db.Text
+  recommendations   String? @db.Text
+  /// [{ description, owner, dueDate, completed }]
+  actionItems       Json    @default("[]")
+  followUpDate      DateTime? @db.Date
+
+  /// Never selected into a client-facing response.
+  privateNotes     String? @db.Text
+  sharedWithClient Boolean @default(false)
+
+  lastEditedBy String?  @db.Uuid
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  session ConsultationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("session_notes")
+}
+
+model Attachment {
+  id        String  @id @default(uuid()) @db.Uuid
+  sessionId String? @db.Uuid
+  /// Object storage key. Private buckets only — never served directly.
+  storageKey String @db.VarChar(512)
+  fileName   String @db.VarChar(320)
+  mimeType   String @db.VarChar(160)
+  sizeBytes  Int
+  visibleToClient Boolean @default(false)
+  uploadedBy String? @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  session ConsultationSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("attachments")
+}
+
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+
+model Payment {
+  id        String @id @default(uuid()) @db.Uuid
+  /// Our reference, sent to Paystack and unique across all attempts.
+  reference String @unique @db.VarChar(120)
+  /// Paystack's own transaction id, populated at verification.
+  providerTransactionId String? @unique @db.VarChar(120)
+
+  bookingId String? @db.Uuid
+  orderId   String? @db.Uuid
+  userId    String? @db.Uuid
+
+  purpose  PaymentPurpose
+  status   PaymentStatus  @default(UNPAID)
+  currency Currency
+  /// Minor units. Recomputed server-side and re-checked against Paystack.
+  amount   Int
+  /// Provider fee, when Paystack reports one.
+  feeAmount Int          @default(0)
+  refundedAmount Int     @default(0)
+
+  channel       String? @db.VarChar(40)
+  cardLast4     String? @db.VarChar(4)
+  cardBrand     String? @db.VarChar(40)
+  customerEmail String  @db.VarChar(254)
+  authorizationCode String? @db.VarChar(120)
+
+  gatewayResponse String? @db.VarChar(320)
+  metadata        Json?
+  paidAt          DateTime? @db.Timestamptz(3)
+  failedAt        DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  order   Order?   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  refunds Refund[]
+
+  @@index([reference])
+  @@index([status])
+  @@index([bookingId])
+  @@index([orderId])
+  @@index([createdAt])
+  @@index([paidAt])
+  @@map("payments")
+}
+
+/// Every webhook delivery, keyed by the provider's event id. The unique
+/// constraint is what makes replayed deliveries no-ops.
+model WebhookEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  provider   String   @db.VarChar(40)
+  /// Provider event identifier, or a hash of the body when none is supplied.
+  eventId    String   @db.VarChar(200)
+  eventType  String   @db.VarChar(80)
+  payload    Json
+  processedAt DateTime? @db.Timestamptz(3)
+  status     String   @default("RECEIVED") @db.VarChar(32)
+  error      String?  @db.Text
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([provider, eventId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@map("webhook_events")
+}
+
+model Refund {
+  id        String @id @default(uuid()) @db.Uuid
+  paymentId String @db.Uuid
+  reference String @unique @db.VarChar(120)
+  providerRefundId String? @db.VarChar(120)
+  amount    Int
+  currency  Currency
+  status    String   @default("PENDING") @db.VarChar(32)
+  reason    String   @db.VarChar(500)
+  merchantNote String? @db.VarChar(500)
+  initiatedBy String? @db.Uuid
+  processedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId])
+  @@index([status])
+  @@map("refunds")
+}
+
+model Invoice {
+  id     String        @id @default(uuid()) @db.Uuid
+  number String        @unique @db.VarChar(32)
+  status InvoiceStatus @default(DRAFT)
+
+  bookingId String? @unique @db.Uuid
+  orderId   String? @unique @db.Uuid
+  userId    String? @db.Uuid
+
+  currency Currency
+  subtotal Int
+  discount Int      @default(0)
+  tax      Int      @default(0)
+  total    Int
+  amountPaid Int    @default(0)
+
+  /// [{ description, quantity, unitAmount, amount }]
+  lines Json @default("[]")
+
+  issuedAt DateTime? @db.Timestamptz(3)
+  dueAt    DateTime? @db.Timestamptz(3)
+  paidAt   DateTime? @db.Timestamptz(3)
+  notes    String?   @db.Text
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  order   Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([userId])
+  @@map("invoices")
+}
+
+// ---------------------------------------------------------------------------
+// Reviews
+// ---------------------------------------------------------------------------
+
+model Review {
+  id        String @id @default(uuid()) @db.Uuid
+  /// One review per booking; the unique constraint enforces it.
+  bookingId String @unique @db.Uuid
+  userId    String @db.Uuid
+  consultantId String @db.Uuid
+  serviceId    String @db.Uuid
+
+  rating              Int
+  title               String? @db.VarChar(160)
+  body                String  @db.Text
+  serviceRating       Int?
+  consultantRating    Int?
+  communicationRating Int?
+  valueRating         Int?
+
+  displayName String?      @db.VarChar(120)
+  isAnonymous Boolean      @default(false)
+  /// True when the review is attached to a completed, paid booking.
+  isVerified  Boolean      @default(true)
+  status      ReviewStatus @default(PENDING)
+  moderationNote String?   @db.VarChar(1000)
+  moderatedBy    String?   @db.Uuid
+  moderatedAt    DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  booking    Booking           @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  consultant ConsultantProfile @relation(fields: [consultantId], references: [id], onDelete: Cascade)
+  service    Service           @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([consultantId, status])
+  @@index([serviceId, status])
+  @@map("reviews")
+}
+
+// ---------------------------------------------------------------------------
+// Commerce
+// ---------------------------------------------------------------------------
+
+model ProductCategory {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar(120)
+  slug        String  @unique @db.VarChar(160)
+  description String? @db.VarChar(500)
+  icon        String? @db.VarChar(60)
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  products Product[]
+
+  @@map("product_categories")
+}
+
+model Product {
+  id               String  @id @default(uuid()) @db.Uuid
+  name             String  @db.VarChar(200)
+  slug             String  @unique @db.VarChar(160)
+  categoryId       String  @db.Uuid
+  description      String  @db.Text
+  shortDescription String? @db.VarChar(400)
+  author           String? @db.VarChar(160)
+  coverImageUrl    String? @db.VarChar(2048)
+  galleryUrls      String[]
+
+  price          Int
+  compareAtPrice Int?
+  currency       Currency @default(KES)
+  sku            String?  @unique @db.VarChar(64)
+
+  type  ProductType @default(DIGITAL)
+  /// Null means unlimited. Only meaningful for PHYSICAL products.
+  stock Int?
+
+  isbn          String? @db.VarChar(20)
+  pages         Int?
+  publishedYear Int?
+
+  status     ContentStatus @default(DRAFT)
+  isFeatured Boolean       @default(false)
+  seoTitle       String?   @db.VarChar(160)
+  seoDescription String?   @db.VarChar(320)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  category     ProductCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  digitalAsset DigitalAsset?
+  orderItems   OrderItem[]
+
+  @@index([slug])
+  @@index([status, isFeatured])
+  @@index([categoryId])
+  @@map("products")
+}
+
+/// The private file behind a digital product. Downloads are always issued as
+/// short-lived signed URLs derived from `storageKey`.
+model DigitalAsset {
+  id         String @id @default(uuid()) @db.Uuid
+  productId  String @unique @db.Uuid
+  storageKey String @db.VarChar(512)
+  fileName   String @db.VarChar(320)
+  mimeType   String @db.VarChar(160)
+  sizeBytes  Int
+  version    String? @db.VarChar(40)
+  downloadCount Int  @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("digital_assets")
+}
+
+model Order {
+  id        String      @id @default(uuid()) @db.Uuid
+  reference String      @unique @db.VarChar(24)
+  userId    String      @db.Uuid
+  status    OrderStatus @default(PENDING_PAYMENT)
+
+  currency Currency
+  subtotal Int
+  /// Applied before tax. Always computed server-side from a Discount row.
+  discount Int      @default(0)
+  tax      Int      @default(0)
+  shipping Int      @default(0)
+  total    Int
+  amountPaid Int    @default(0)
+  discountCode String? @db.VarChar(40)
+
+  shippingAddress Json?
+  notes           String? @db.Text
+  idempotencyKey  String? @unique @db.VarChar(80)
+  paidAt          DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user     User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items    OrderItem[]
+  payments Payment[]
+  invoice  Invoice?
+  entitlements DownloadEntitlement[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        String @id @default(uuid()) @db.Uuid
+  orderId   String @db.Uuid
+  productId String @db.Uuid
+  /// Name and price are copied at purchase time so later edits to the product
+  /// never rewrite historical order totals.
+  name       String @db.VarChar(200)
+  unitAmount Int
+  quantity   Int
+  amount     Int
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+/// Grants a user download access to a digital product. Created only after the
+/// paying order is confirmed PAID by a verified webhook.
+model DownloadEntitlement {
+  id        String @id @default(uuid()) @db.Uuid
+  userId    String @db.Uuid
+  productId String @db.Uuid
+  orderId   String @db.Uuid
+
+  downloadCount Int       @default(0)
+  maxDownloads  Int?
+  expiresAt     DateTime? @db.Timestamptz(3)
+  lastDownloadAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId, orderId])
+  @@index([userId])
+  @@map("download_entitlements")
+}
+
+// ---------------------------------------------------------------------------
+// Content
+// ---------------------------------------------------------------------------
+
+model ArticleCategory {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar(120)
+  slug        String  @unique @db.VarChar(160)
+  description String? @db.VarChar(500)
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  articles Article[]
+
+  @@map("article_categories")
+}
+
+model Article {
+  id         String @id @default(uuid()) @db.Uuid
+  title      String @db.VarChar(200)
+  slug       String @unique @db.VarChar(160)
+  categoryId String @db.Uuid
+  excerpt    String @db.VarChar(400)
+  /// Sanitised HTML. Written through a server-side sanitiser on every save.
+  content    String @db.Text
+  tags       String[]
+  featuredImageUrl String? @db.VarChar(2048)
+  authorId   String? @db.Uuid
+
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?     @db.Timestamptz(3)
+  readingMinutes Int        @default(5)
+  viewCount   Int           @default(0)
+
+  seoTitle       String? @db.VarChar(160)
+  seoDescription String? @db.VarChar(320)
+
+  /// Journal entries are articles with publication metadata.
+  isJournal     Boolean @default(false)
+  journalVolume String? @db.VarChar(40)
+  journalIssue  String? @db.VarChar(40)
+  doi           String? @db.VarChar(120)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  category ArticleCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  author   User?           @relation("ArticleAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([slug])
+  @@index([status, publishedAt])
+  @@index([categoryId])
+  @@index([isJournal, status])
+  @@map("articles")
+}
+
+// ---------------------------------------------------------------------------
+// Platform services
+// ---------------------------------------------------------------------------
+
+/// A redeemable discount code.
+///
+/// The code is the only thing a client ever sends; every amount is derived here
+/// and recomputed server-side at checkout, so a tampered request buys nothing.
+model Discount {
+  id          String  @id @default(uuid()) @db.Uuid
+  /// Stored upper-case; lookups upper-case the input so codes are case-insensitive.
+  code        String  @unique @db.VarChar(40)
+  description String? @db.VarChar(240)
+
+  type  DiscountType
+  value Int
+  /// Required for FIXED_AMOUNT so a KES code cannot be applied to a USD basket.
+  currency Currency?
+
+  appliesTo DiscountAppliesTo @default(EVERYTHING)
+  /// Empty means every service (or product) within `appliesTo`.
+  serviceIds String[] @db.Uuid
+  productIds String[] @db.Uuid
+
+  /// Minimum pre-discount subtotal, in minor units.
+  minSubtotal Int @default(0)
+  /// Caps a percentage discount, in minor units. 0 means uncapped.
+  maxDiscount Int @default(0)
+
+  /// Null means unlimited.
+  maxRedemptions Int?
+  redeemedCount  Int  @default(0)
+  perClientLimit Int?
+
+  startsAt DateTime? @db.Timestamptz(3)
+  endsAt   DateTime? @db.Timestamptz(3)
+  isActive Boolean   @default(true)
+
+  createdBy String?  @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  redemptions DiscountRedemption[]
+
+  @@index([code])
+  @@index([isActive, startsAt, endsAt])
+  @@map("discounts")
+}
+
+/// One row per successful application, which is what enforces the redemption
+/// caps and gives finance an audit trail of what each code actually cost.
+model DiscountRedemption {
+  id         String  @id @default(uuid()) @db.Uuid
+  discountId String  @db.Uuid
+  userId     String? @db.Uuid
+  /// A booking or an order redeems at most one code, hence the unique keys.
+  bookingId  String? @unique @db.Uuid
+  orderId    String? @unique @db.Uuid
+
+  amount   Int
+  currency Currency
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  discount Discount @relation(fields: [discountId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([discountId, userId])
+  @@map("discount_redemptions")
+}
+
+model Notification {
+  id     String  @id @default(uuid()) @db.Uuid
+  userId String  @db.Uuid
+  type   String  @db.VarChar(60)
+  title  String  @db.VarChar(200)
+  body   String  @db.VarChar(1000)
+  href   String? @db.VarChar(500)
+  metadata Json?
+  readAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model EmailLog {
+  id        String      @id @default(uuid()) @db.Uuid
+  recipient String      @db.VarChar(254)
+  template  String      @db.VarChar(60)
+  subject   String      @db.VarChar(320)
+  status    EmailStatus @default(QUEUED)
+  provider  String      @db.VarChar(40)
+  providerMessageId String? @db.VarChar(320)
+  error     String?     @db.Text
+  attempts  Int         @default(0)
+
+  /// Loose link back to whatever triggered the send, for admin drill-down.
+  relatedEntity   String? @db.VarChar(60)
+  relatedEntityId String? @db.Uuid
+
+  sentAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([status])
+  @@index([recipient])
+  @@index([template])
+  @@index([createdAt])
+  @@map("email_logs")
+}
+
+/// Immutable. The API only ever inserts; there is no update or delete path.
+model AuditLog {
+  id       String  @id @default(uuid()) @db.Uuid
+  actorId  String? @db.Uuid
+  action   String  @db.VarChar(80)
+  entity   String  @db.VarChar(60)
+  entityId String? @db.VarChar(64)
+  ip        String? @db.VarChar(64)
+  userAgent String? @db.VarChar(320)
+  metadata  Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([entity, entityId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// Background work queue. Jobs are keyed by `dedupeKey` so a re-run of the
+/// scheduler cannot enqueue a second reminder for the same booking.
+model ScheduledJob {
+  id        String    @id @default(uuid()) @db.Uuid
+  type      String    @db.VarChar(60)
+  status    JobStatus @default(PENDING)
+  runAt     DateTime  @db.Timestamptz(3)
+  payload   Json
+  dedupeKey String?   @unique @db.VarChar(200)
+
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  lastError   String?   @db.Text
+  startedAt   DateTime? @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
+  lockedBy    String?   @db.VarChar(80)
+  lockedAt    DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([status, runAt])
+  @@index([type])
+  @@map("scheduled_jobs")
+}
+
+/// Key/value platform configuration editable from Admin → Settings.
+model Setting {
+  key         String   @id @db.VarChar(80)
+  value       Json
+  description String?  @db.VarChar(320)
+  /// Public settings are exposed to the web client via GET /api/settings/public.
+  isPublic    Boolean  @default(false)
+  updatedBy   String?  @db.Uuid
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  @@map("settings")
+}
+
+/// Credentials and connection state for third-party providers. Secrets are
+/// encrypted at rest; the API never returns them, only a connection state.
+model Integration {
+  id        String  @id @default(uuid()) @db.Uuid
+  key       String  @unique @db.VarChar(60)
+  name      String  @db.VarChar(120)
+  category  String  @db.VarChar(40)
+  isEnabled Boolean @default(false)
+  /// AES-256-GCM ciphertext of a JSON credential bag.
+  credentials String? @db.Text
+  config      Json?
+  accountLabel String? @db.VarChar(200)
+  connectedAt  DateTime? @db.Timestamptz(3)
+  lastError    String?   @db.Text
+  lastCheckedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@map("integrations")
+}
+
+model ContactMessage {
+  id      String  @id @default(uuid()) @db.Uuid
+  name    String  @db.VarChar(160)
+  email   String  @db.VarChar(254)
+  phone   String? @db.VarChar(32)
+  company String? @db.VarChar(160)
+  subject String  @db.VarChar(200)
+  message String  @db.Text
+  status  String  @default("NEW") @db.VarChar(32)
+  handledBy String? @db.Uuid
+  handledAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([status, createdAt])
+  @@map("contact_messages")
+}

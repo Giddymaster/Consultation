@@ -1,0 +1,14 @@
+{
+  "extends": "@meridian/config/tsconfig.react.json",
+  "compilerOptions": {
+    "types": ["vite/client", "node"],
+    // TypeScript 7 removed `baseUrl`; path aliases are now resolved relative
+    // to this file's directory, which matches the Vite alias in vite.config.ts.
+    "paths": { "@/*": ["./src/*"] },
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "composite": false
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+}
