@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "pnpm install --frozen-lockfile --filter @meridian/web...",
-  "buildCommand": "pnpm --filter @meridian/types build && pnpm --filter @meridian/web build",
-  "outputDirectory": "apps/web/dist",
+  "installCommand": "cd ../.. && pnpm install --frozen-lockfile --filter @meridian/web...",
+  "buildCommand": "cd ../.. && pnpm --filter @meridian/types build && pnpm --filter @meridian/web build",
+  "outputDirectory": "dist",
   "framework": null,
   "rewrites": [
     {
@@ -14,6 +14,10 @@
     {
       "source": "/assets/(.*)",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
     },
     {
       "source": "/(.*)",

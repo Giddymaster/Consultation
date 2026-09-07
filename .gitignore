@@ -28,3 +28,6 @@ storage/
 
 # Prisma generated client
 apps/api/src/generated/
+
+# Vercel CLI link/pull artefacts
+.vercel
