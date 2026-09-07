@@ -24,7 +24,11 @@ pnpm-debug.log*
 
 apps/web/dev-dist/
 apps/api/uploads/
-storage/
+
+# The uploads directory, anchored. An unanchored `storage/` also matched
+# apps/api/src/services/storage/ — a source directory — and silently kept the
+# storage driver out of the repository entirely.
+/apps/api/storage/
 
 # Prisma generated client
 apps/api/src/generated/

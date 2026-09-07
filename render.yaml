@@ -1,0 +1,111 @@
+# Render blueprint for the Meridian API.
+#
+# The web app is deployed separately (Vercel, via apps/web/vercel.json). This
+# file covers the half that Vercel is a poor fit for: a long-running Fastify
+# process with a database and a background job worker.
+#
+# Create it with Render's "New Blueprint" flow pointed at this repository.
+# Everything below is provisioned automatically except the four secrets marked
+# `sync: false`, which Render will prompt for.
+
+databases:
+  - name: meridian-db
+    databaseName: meridian
+    user: meridian
+    # Postgres 18 matches development; the schema uses `Timestamptz(3)` and
+    # array columns, neither of which needs anything newer.
+    postgresMajorVersion: "18"
+    plan: basic-256mb
+
+services:
+  - type: web
+    name: meridian-api
+    runtime: node
+    plan: starter
+    region: frankfurt
+    branch: main
+
+    # pnpm is not the default package manager on Render, so corepack activates
+    # the exact version pinned in package.json before anything else runs.
+    # `--filter @meridian/api...` installs the API and its workspace packages
+    # and skips the web app's toolchain entirely.
+    buildCommand: >-
+      corepack enable &&
+      corepack prepare pnpm@11.5.0 --activate &&
+      pnpm install --frozen-lockfile --filter @meridian/api... &&
+      pnpm --filter @meridian/types build &&
+      pnpm --filter @meridian/api build
+
+    # Migrations run at release, not at boot: `preDeployCommand` runs once per
+    # deploy, whereas a start-command migration would race every instance
+    # against every other one on a restart or a scale-up.
+    preDeployCommand: pnpm --filter @meridian/api exec prisma migrate deploy
+
+    startCommand: pnpm --filter @meridian/api start
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Render injects PORT; the server already reads it and binds 0.0.0.0.
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: meridian-db
+          property: connectionString
+
+      # Generated once by Render and then held constant. Rotating either of
+      # these signs every existing session out, which is the correct behaviour
+      # but not something a routine redeploy should do on its own.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+
+      # Must be exactly 32 bytes, base64-encoded — Render's generator emits a
+      # different shape, so this one is entered by hand. Generate with:
+      #   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+      # Losing it makes every stored OAuth refresh token undecryptable.
+      - key: ENCRYPTION_KEY
+        sync: false
+
+      # The public origin of the web app, and this service's own URL. Both are
+      # required and validated as URLs at boot. APP_URL is also what CORS and
+      # the links in transactional email are built from.
+      - key: APP_URL
+        sync: false
+      - key: API_URL
+        fromService:
+          type: web
+          name: meridian-api
+          property: host
+
+      # Absent by design until the account is connected. Every integration
+      # reports "Not connected" and refuses to act rather than inventing a
+      # meeting link or a payment, so the platform is usable without them.
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_PUBLIC_KEY
+        sync: false
+
+      # The job worker runs inside the web process. That is the right default
+      # at this size: the queue is database-backed, every handler is idempotent
+      # and every enqueue is deduplicated, so a single worker is sufficient. To
+      # scale it out, set this to false and add a `type: worker` service with
+      # the same build and `pnpm --filter @meridian/api jobs` as its start.
+      - key: RUN_JOBS_IN_PROCESS
+        value: "true"
+
+      - key: STORAGE_DRIVER
+        value: local
+      # A Render disk, so uploaded files and brand assets survive a redeploy.
+      # Without this they live on the ephemeral filesystem and vanish.
+      - key: STORAGE_LOCAL_PATH
+        value: /var/data/storage
+
+    disk:
+      name: meridian-storage
+      mountPath: /var/data
+      sizeGB: 1

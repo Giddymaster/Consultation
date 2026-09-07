@@ -11,6 +11,13 @@
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
+
+  /// The generated client is compiled by tsc and then run by Node directly.
+  /// Without these two options it emits extensionless ESM imports
+  /// (`from "./enums"`), which tsx resolves in development and Node refuses in
+  /// production — the built server died on its first import.
+  moduleFormat        = "esm"
+  importFileExtension = "js"
 }
 
 datasource db {
