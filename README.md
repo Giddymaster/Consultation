@@ -473,14 +473,40 @@ Designed so the two applications deploy and scale independently.
 
 ### Web
 
+`vercel.json` at the repository root already carries the install command, build
+command, output directory, SPA rewrite and cache headers, so a Vercel project
+pointed at the repo root needs only:
+
 ```
-Build command:      pnpm install && pnpm --filter @meridian/types build && pnpm --filter @meridian/web build
-Output directory:   apps/web/dist
 Environment:        VITE_API_URL=https://api.your-domain.com
 ```
 
-Add an SPA rewrite so client-side routes resolve — on Vercel, a `vercel.json`
-with `{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}`.
+For any other host, the equivalent is:
+
+```
+Install:            pnpm install --frozen-lockfile --filter @meridian/web...
+Build:              pnpm --filter @meridian/types build && pnpm --filter @meridian/web build
+Output directory:   apps/web/dist
+```
+
+The `--filter @meridian/web...` matters. Without it the whole workspace is
+installed, which drags `argon2`, `prisma` and `@prisma/engines` — all API-only,
+all needing a native compile or a binary download — into a build that only
+produces static files. The filtered install skips them entirely and is roughly
+twice as fast.
+
+A single SPA rewrite to `/index.html` would also swallow `sw.js`,
+`manifest.webmanifest` and `offline.html`, breaking the service worker, so the
+rewrite in `vercel.json` excludes `/assets/*` and any path with a file
+extension.
+
+> **If a deploy fails with `ERR_PNPM_IGNORED_BUILDS`,** the `allowBuilds` block
+> in `pnpm-workspace.yaml` is the thing to check. pnpm 11 reads that key, and
+> every entry must be `true` — pnpm scaffolds the block with the placeholder
+> text `set this to true or false`, which approves nothing. A warm
+> `node_modules` hides the problem, because the approval is also recorded in
+> `node_modules/.modules.yaml`; only a clean install shows it. `pnpm
+> approve-builds --all` fills the block in correctly.
 
 ### API
 

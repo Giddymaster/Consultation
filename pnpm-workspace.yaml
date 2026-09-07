@@ -2,15 +2,24 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
+# pnpm blocks dependency install scripts by default. These four genuinely need
+# one: argon2 compiles a native addon, and esbuild and the Prisma packages fetch
+# or generate platform binaries. Everything else stays blocked.
+#
+# `allowBuilds` is the key pnpm 11 reads. It was previously present here with
+# pnpm's own unanswered placeholder values ("set this to true or false"), which
+# approves nothing — so a fresh install failed with ERR_PNPM_IGNORED_BUILDS
+# while a warm node_modules kept working from its recorded approval. That is
+# what broke the first Vercel deploy.
 allowBuilds:
-  '@prisma/engines': set this to true or false
-  argon2: set this to true or false
-  esbuild: set this to true or false
-  prisma: set this to true or false
+  '@prisma/engines': true
+  argon2: true
+  esbuild: true
+  prisma: true
 
-# pnpm blocks postinstall scripts by default. These four genuinely need one:
-# argon2 compiles a native addon, esbuild and the Prisma packages download or
-# generate platform binaries. Everything else stays blocked.
+# The pre-11 spelling of the same list. Kept so an older pnpm — a CI image that
+# resolves its version from the lockfile, for instance — approves them too.
+# pnpm 11 ignores this key; it does not warn about it.
 onlyBuiltDependencies:
   - '@prisma/engines'
   - argon2
