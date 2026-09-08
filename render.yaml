@@ -41,7 +41,13 @@ services:
     # against every other one on a restart or a scale-up.
     preDeployCommand: pnpm --filter @meridian/api exec prisma migrate deploy
 
-    startCommand: pnpm --filter @meridian/api start
+    # API_URL is injected here rather than declared below. Render's
+    # `fromService ... property: host` yields a bare hostname
+    # (meridian-api.onrender.com), and the app validates API_URL as a full
+    # URL — it would have refused to boot. RENDER_EXTERNAL_URL is the same
+    # address with its scheme, and keeping the substitution here leaves the
+    # platform detail in the platform's own file.
+    startCommand: API_URL=$RENDER_EXTERNAL_URL pnpm --filter @meridian/api start
 
     healthCheckPath: /health
 
@@ -71,16 +77,11 @@ services:
       - key: ENCRYPTION_KEY
         sync: false
 
-      # The public origin of the web app, and this service's own URL. Both are
-      # required and validated as URLs at boot. APP_URL is also what CORS and
-      # the links in transactional email are built from.
+      # The public origin of the web app. Required, validated as a URL at boot,
+      # and what CORS and the links in transactional email are built from.
+      # (API_URL is set in the start command above.)
       - key: APP_URL
         sync: false
-      - key: API_URL
-        fromService:
-          type: web
-          name: meridian-api
-          property: host
 
       # Absent by design until the account is connected. Every integration
       # reports "Not connected" and refuses to act rather than inventing a
