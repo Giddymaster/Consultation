@@ -62,7 +62,17 @@ describe('discount codes', () => {
     await prisma.$disconnect();
   });
 
-  const book = (clientProfileId: string, dayOffset: number, discountCode?: string) =>
+  /**
+   * One booking per hour on a single working day.
+   *
+   * Day offsets are not usable as unique slots: `nextWorkingSlot` clamps a
+   * weekend forward, so offsets 5, 6 and 7 all resolve to the same Monday when
+   * the suite runs on a Monday. Two bookings then contend for one slot and fail
+   * on availability instead of exercising the discount rule under test — a
+   * failure that only appears on certain weekdays. The hour is the key here, so
+   * the slots are distinct whatever day it is.
+   */
+  const book = (clientProfileId: string, hour: number, discountCode?: string) =>
     createBooking({
       clientId: clientProfileId,
       actorId: null,
@@ -70,7 +80,7 @@ describe('discount codes', () => {
         serviceId,
         consultantId,
         durationMinutes,
-        startAt: nextWorkingSlot(dayOffset, 10).toISOString(),
+        startAt: nextWorkingSlot(3, hour).toISOString(),
         timezone: 'Africa/Nairobi',
         meetingProvider: 'ZOOM',
         client: { firstName: 'X', lastName: 'Y', email: 'x@test.local', phone: '+254700000000' },
@@ -83,7 +93,7 @@ describe('discount codes', () => {
       data: { code: 'TENOFF', type: 'PERCENTAGE', value: 1000, isActive: true },
     });
 
-    const result = await book(alice.clientProfileId, 3, 'TENOFF');
+    const result = await book(alice.clientProfileId, 9, 'TENOFF');
 
     expect(result.pricing.subtotal).toBe(durationPrice);
     expect(result.pricing.discount).toBe(Math.round(durationPrice * 0.1));
@@ -187,11 +197,11 @@ describe('discount codes', () => {
       data: { code: 'ONEPERCLIENT', type: 'PERCENTAGE', value: 1000, perClientLimit: 1, isActive: true },
     });
 
-    await book(alice.clientProfileId, 4, 'ONEPERCLIENT');
+    await book(alice.clientProfileId, 10, 'ONEPERCLIENT');
 
     // Second attempt by the same client is refused; a different client is fine.
-    await expect(book(alice.clientProfileId, 5, 'ONEPERCLIENT')).rejects.toThrow();
-    await expect(book(bob.clientProfileId, 6, 'ONEPERCLIENT')).resolves.toBeTruthy();
+    await expect(book(alice.clientProfileId, 11, 'ONEPERCLIENT')).rejects.toThrow();
+    await expect(book(bob.clientProfileId, 12, 'ONEPERCLIENT')).resolves.toBeTruthy();
   });
 
   /**
@@ -204,8 +214,8 @@ describe('discount codes', () => {
     });
 
     const attempts = await Promise.allSettled([
-      book(alice.clientProfileId, 7, 'LASTONE'),
-      book(bob.clientProfileId, 8, 'LASTONE'),
+      book(alice.clientProfileId, 13, 'LASTONE'),
+      book(bob.clientProfileId, 14, 'LASTONE'),
     ]);
 
     const succeeded = attempts.filter((attempt) => attempt.status === 'fulfilled');
@@ -225,7 +235,7 @@ describe('discount codes', () => {
 
     // The booking input has no amount field at all — the code is the only lever
     // — so a client sending one changes nothing about what is charged.
-    const result = await book(alice.clientProfileId, 9, 'FIVEPCT');
+    const result = await book(alice.clientProfileId, 15, 'FIVEPCT');
     expect(result.pricing.discount).toBe(Math.round(durationPrice * 0.05));
   });
 
@@ -234,7 +244,7 @@ describe('discount codes', () => {
       data: { code: 'TRACKED', type: 'PERCENTAGE', value: 1000, isActive: true },
     });
 
-    const result = await book(bob.clientProfileId, 10, 'TRACKED');
+    const result = await book(bob.clientProfileId, 16, 'TRACKED');
 
     const redemption = await prisma.discountRedemption.findFirst({
       where: { bookingId: result.bookingId },
