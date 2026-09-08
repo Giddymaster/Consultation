@@ -222,7 +222,9 @@ export function RegisterPage() {
       lastName: '',
       email: '',
       password: '',
-      phone: '',
+      // No phone input on this form; the booking flow is where a number is
+      // collected. Leaving a default here meant submitting a field the user
+      // could not see or correct.
       company: '',
       timezone: browserTimezone(),
       marketingOptIn: false,

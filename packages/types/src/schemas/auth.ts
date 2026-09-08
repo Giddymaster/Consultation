@@ -13,13 +13,49 @@ export const passwordSchema = z
   .refine((v) => /[A-Z]/.test(v), 'Include an uppercase letter')
   .refine((v) => /[0-9]/.test(v), 'Include a number');
 
+/**
+ * An optional free-text field, as an HTML form actually delivers it.
+ *
+ * A text input the user leaves alone submits '', never `undefined`, so
+ * `z.string().min(n).optional()` measures the empty string and rejects it for a
+ * length nobody tried to give. That is what made registration impossible: the
+ * form carried an empty phone default, so every account — however well filled
+ * in — failed on a hidden field with a raw "expected string to have >=7
+ * characters". Here empty means "not provided", and only a value that is
+ * really there is measured.
+ *
+ * `absent` is what an omitted field becomes: `undefined` on create, `null` on
+ * update, where the API reads null as "clear this".
+ */
+const optionalText = <T>(opts: { min?: number; max: number; message?: string; absent: T }) =>
+  z
+    .string()
+    .transform((value) => value.trim())
+    .refine(
+      (value) => value.length <= opts.max,
+      `Keep this to ${opts.max} characters or fewer`,
+    )
+    .refine(
+      (value) => value === '' || value.length >= (opts.min ?? 0),
+      opts.message ?? 'This is too short',
+    )
+    .transform((value) => (value === '' ? opts.absent : value))
+    .optional();
+
+const optionalPhone = optionalText({
+  min: 7,
+  max: 32,
+  message: 'Enter a reachable phone number',
+  absent: undefined,
+});
+
 export const registerSchema = z.object({
   firstName: z.string().trim().min(1, 'Required').max(80),
   lastName: z.string().trim().min(1, 'Required').max(80),
   email: emailSchema,
   password: passwordSchema,
-  phone: z.string().trim().min(7).max(32).optional(),
-  company: z.string().trim().max(160).optional(),
+  phone: optionalPhone,
+  company: optionalText({ max: 160, absent: undefined }),
   timezone: timezoneSchema.optional(),
   marketingOptIn: z.boolean().default(false),
 });
@@ -64,9 +100,16 @@ export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 export const updateProfileSchema = z.object({
   firstName: z.string().trim().min(1).max(80).optional(),
   lastName: z.string().trim().min(1).max(80).optional(),
-  phone: z.string().trim().min(7).max(32).nullable().optional(),
-  company: z.string().trim().max(160).nullable().optional(),
-  jobTitle: z.string().trim().max(160).nullable().optional(),
+  // On update, a field the user has emptied means "clear this", which the API
+  // stores as null — so these resolve to null rather than dropping out.
+  phone: optionalText({
+    min: 7,
+    max: 32,
+    message: 'Enter a reachable phone number',
+    absent: null,
+  }).nullable(),
+  company: optionalText({ max: 160, absent: null }).nullable(),
+  jobTitle: optionalText({ max: 160, absent: null }).nullable(),
   timezone: timezoneSchema.optional(),
   avatarUrl: z.url().max(2048).nullable().optional(),
   marketingOptIn: z.boolean().optional(),
