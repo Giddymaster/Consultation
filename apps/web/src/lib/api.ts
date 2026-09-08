@@ -18,6 +18,23 @@ import type { ApiErrorBody, ApiResponse, ErrorCode, FieldIssue } from '@meridian
  */
 export const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
+/**
+ * A production build with no API origin has nowhere to send requests, so every
+ * call lands on the site's own host and comes back as the SPA's index.html —
+ * which surfaces as an opaque 405 or a JSON parse failure rather than anything
+ * a reader could act on. Detected once here so the failure can name itself.
+ */
+const API_ORIGIN_MISSING = import.meta.env.PROD && !import.meta.env.VITE_API_URL;
+
+const MISCONFIGURED_MESSAGE =
+  'This site is not connected to its API. VITE_API_URL was not set when it was built.';
+
+if (API_ORIGIN_MISSING && typeof console !== 'undefined') {
+  console.error(
+    `[config] ${MISCONFIGURED_MESSAGE} Every request will hit this site's own origin and fail.`,
+  );
+}
+
 export class ApiError extends Error {
   readonly code: ErrorCode;
   readonly status: number;
@@ -164,9 +181,13 @@ async function execute<T>(path: string, options: RequestOptions, isRetry: boolea
   try {
     payload = (await response.json()) as ApiResponse<T>;
   } catch {
+    // Reaching here having received HTML is the signature of a missing API
+    // origin: the request was served by this site's own SPA fallback.
     throw new ApiError(response.status, {
       code: 'INTERNAL_ERROR',
-      message: 'The server returned an unexpected response.',
+      message: API_ORIGIN_MISSING
+        ? MISCONFIGURED_MESSAGE
+        : 'The server returned an unexpected response.',
     });
   }
 
